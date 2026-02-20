@@ -1,0 +1,18 @@
+[
+  {
+    "type": "published",
+    "photoId": "photo-1",
+    "createdAt": "2026-02-20T00:15:00.000Z",
+    "payload": {
+      "message": "Atrium Composite published"
+    }
+  },
+  {
+    "type": "updated",
+    "photoId": "photo-2",
+    "createdAt": "2026-02-20T01:12:00.000Z",
+    "payload": {
+      "message": "Facade Merge received color pass"
+    }
+  }
+]

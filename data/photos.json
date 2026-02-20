@@ -1,0 +1,32 @@
+[
+  {
+    "id": "photo-1",
+    "title": "Atrium Composite",
+    "description": "A cinematic reconstruction of steel and light.",
+    "tags": ["atrium", "steel", "daylight"],
+    "src": "/assets/placeholders/source-1.png",
+    "finalComposite": "/assets/placeholders/final-composite.png",
+    "createdAt": "2026-02-20T00:00:00.000Z",
+    "published": true,
+    "metadata": {
+      "camera": "PlaceholderCam v1",
+      "lens": "35mm",
+      "location": "Studio"
+    }
+  },
+  {
+    "id": "photo-2",
+    "title": "Facade Merge",
+    "description": "Multi-pass blend from structural phase captures.",
+    "tags": ["facade", "concrete", "sunset"],
+    "src": "/assets/placeholders/source-2.png",
+    "finalComposite": "/assets/placeholders/final-composite.png",
+    "createdAt": "2026-02-19T00:00:00.000Z",
+    "published": true,
+    "metadata": {
+      "camera": "PlaceholderCam v1",
+      "lens": "24mm",
+      "location": "Lot A"
+    }
+  }
+]

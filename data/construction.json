@@ -1,0 +1,90 @@
+[
+  {
+    "photoId": "photo-1",
+    "blueprint": [
+      "Grid alignment",
+      "Primary beam registration",
+      "Shadow harmonics"
+    ],
+    "steps": [
+      {
+        "id": "step-1",
+        "label": "Ingest Source Frames",
+        "timestamp": "00:00",
+        "promptText": "normalize dynamic range; preserve specular highlights",
+        "settingsJSON": {
+          "exposure": -0.15,
+          "contrast": 1.12,
+          "denoise": 0.08
+        },
+        "preview": "/assets/placeholders/source-1.png"
+      },
+      {
+        "id": "step-2",
+        "label": "Structure Lock",
+        "timestamp": "00:18",
+        "promptText": "feature-match scaffolding edges and slab anchors",
+        "settingsJSON": {
+          "featureThreshold": 0.72,
+          "stabilize": true
+        },
+        "preview": "/assets/placeholders/source-2.png"
+      },
+      {
+        "id": "step-3",
+        "label": "Composite Resolve",
+        "timestamp": "00:42",
+        "promptText": "blend masks with soft radial reveals and bloom pass",
+        "settingsJSON": {
+          "blendMode": "screen",
+          "bloom": 0.24,
+          "vignette": 0.35
+        },
+        "preview": "/assets/placeholders/final-composite.png"
+      }
+    ]
+  },
+  {
+    "photoId": "photo-2",
+    "blueprint": [
+      "Facade edge detection",
+      "Color temperature match",
+      "Final luma polish"
+    ],
+    "steps": [
+      {
+        "id": "step-a",
+        "label": "Base Plate",
+        "timestamp": "00:00",
+        "promptText": "assemble base plate and align vanishing lines",
+        "settingsJSON": {
+          "alignment": "perspective",
+          "grid": true
+        },
+        "preview": "/assets/placeholders/source-3.png"
+      },
+      {
+        "id": "step-b",
+        "label": "Tone Merge",
+        "timestamp": "00:22",
+        "promptText": "match warm concrete tones and remove clipping",
+        "settingsJSON": {
+          "warmth": 0.31,
+          "highlights": -0.12
+        },
+        "preview": "/assets/placeholders/source-4.png"
+      },
+      {
+        "id": "step-c",
+        "label": "Final Composite",
+        "timestamp": "00:47",
+        "promptText": "apply bloom and line-art overlay",
+        "settingsJSON": {
+          "overlay": "blueprint",
+          "grain": 0.07
+        },
+        "preview": "/assets/placeholders/final-composite.png"
+      }
+    ]
+  }
+]
