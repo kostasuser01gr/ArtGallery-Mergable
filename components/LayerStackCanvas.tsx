@@ -19,26 +19,73 @@ type LayerStackCanvasProps = {
   progress: number;
   reducedMotion: boolean;
   blueprint?: string[];
+  cinematicMode?: boolean;
 };
 
 function normalizeAsset(file: string) {
   return file.startsWith("/") ? file : `/assets/${file}`;
 }
 
+const imageCache = new Map<string, HTMLImageElement>();
+
 function loadImage(src: string): Promise<HTMLImageElement> {
+  const cached = imageCache.get(src);
+  if (cached) return Promise.resolve(cached);
+
   return new Promise((resolve, reject) => {
     const image = new Image();
     image.crossOrigin = "anonymous";
-    image.onload = () => resolve(image);
-    image.onerror = reject;
+    image.onload = () => {
+      imageCache.set(src, image);
+      resolve(image);
+    };
+    image.onerror = (err) => {
+      console.error(`Failed to load image: ${src}`, err);
+      reject(err);
+    };
     image.src = src;
   });
+}
+
+function applyChromaticAberration(
+  ctx: CanvasRenderingContext2D, 
+  image: HTMLImageElement, 
+  x: number, 
+  y: number, 
+  w: number, 
+  h: number, 
+  intensity: number
+) {
+  if (intensity < 0.01) {
+    ctx.drawImage(image, x, y, w, h);
+    return;
+  }
+
+  const offset = intensity * 4;
+  
+  ctx.save();
+  ctx.globalCompositeOperation = "screen";
+  
+  // Red channel
+  ctx.globalAlpha = 1.0;
+  ctx.filter = "matrix(1, 0, 0, 0, 0,  0, 0, 0, 0, 0,  0, 0, 0, 0, 0,  0, 0, 0, 1, 0)";
+  ctx.drawImage(image, x - offset, y, w, h);
+  
+  // Green channel
+  ctx.filter = "matrix(0, 0, 0, 0, 0,  0, 1, 0, 0, 0,  0, 0, 0, 0, 0,  0, 0, 0, 1, 0)";
+  ctx.drawImage(image, x, y, w, h);
+  
+  // Blue channel
+  ctx.filter = "matrix(0, 0, 0, 0, 0,  0, 0, 0, 0, 0,  0, 0, 1, 0, 0,  0, 0, 0, 1, 0)";
+  ctx.drawImage(image, x + offset, y, w, h);
+  
+  ctx.restore();
 }
 
 function drawFilmGrain(ctx: CanvasRenderingContext2D, width: number, height: number, intensity: number) {
   const count = Math.floor((width * height) / 3200);
   ctx.save();
-  ctx.fillStyle = `rgba(255,255,255,${0.04 * intensity})`;
+  ctx.fillStyle = `rgba(255, 255, 255, ${0.04 * intensity})`;
   for (let i = 0; i < count; i += 1) {
     const x = Math.random() * width;
     const y = Math.random() * height;
@@ -50,46 +97,14 @@ function drawFilmGrain(ctx: CanvasRenderingContext2D, width: number, height: num
 
 function drawVignette(ctx: CanvasRenderingContext2D, width: number, height: number, opacity: number) {
   const gradient = ctx.createRadialGradient(
-    width / 2,
-    height / 2,
-    width * 0.2,
-    width / 2,
-    height / 2,
-    width * 0.65,
+    width / 2, height / 2, width * 0.2,
+    width / 2, height / 2, width * 0.75
   );
   gradient.addColorStop(0, "rgba(0,0,0,0)");
-  gradient.addColorStop(1, `rgba(0,0,0,${opacity})`);
+  gradient.addColorStop(1, `rgba(0, 0, 0, ${opacity * 1.2})`);
   ctx.save();
   ctx.fillStyle = gradient;
   ctx.fillRect(0, 0, width, height);
-  ctx.restore();
-}
-
-function drawBlueprint(ctx: CanvasRenderingContext2D, width: number, height: number, lines: string[]) {
-  ctx.save();
-  ctx.strokeStyle = "rgba(140, 220, 255, 0.22)";
-  ctx.lineWidth = 1;
-
-  const grid = 40;
-  for (let x = 0; x <= width; x += grid) {
-    ctx.beginPath();
-    ctx.moveTo(x, 0);
-    ctx.lineTo(x, height);
-    ctx.stroke();
-  }
-
-  for (let y = 0; y <= height; y += grid) {
-    ctx.beginPath();
-    ctx.moveTo(0, y);
-    ctx.lineTo(width, y);
-    ctx.stroke();
-  }
-
-  ctx.fillStyle = "rgba(140, 220, 255, 0.7)";
-  ctx.font = "12px Menlo, monospace";
-  lines.slice(0, 4).forEach((line, index) => {
-    ctx.fillText(line, 16, 24 + index * 18);
-  });
   ctx.restore();
 }
 
@@ -101,147 +116,136 @@ export function LayerStackCanvas({
   progress,
   reducedMotion,
   blueprint,
+  cinematicMode = true,
 }: LayerStackCanvasProps) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const [pointer, setPointer] = useState({ x: 0, y: 0 });
+  const [isReady, setIsReady] = useState(false);
+  
   const progressRef = useRef(progress);
   const pointerRef = useRef(pointer);
 
-  useEffect(() => {
-    progressRef.current = progress;
-  }, [progress]);
+  useEffect(() => { progressRef.current = progress; }, [progress]);
+  useEffect(() => { pointerRef.current = pointer; }, [pointer]);
+
+  const sourcePaths = useMemo(() => sources.map(s => normalizeAsset(s.file)), [sources]);
+  const finalPath = useMemo(() => normalizeAsset(finalComposite), [finalComposite]);
 
   useEffect(() => {
-    pointerRef.current = pointer;
-  }, [pointer]);
+    let rafId = 0;
+    let isCancelled = false;
 
-  const sourcePaths = useMemo(
-    () => sources.map((source) => normalizeAsset(source.file)),
-    [sources],
-  );
+    const initialize = async () => {
+      try {
+        setIsReady(false);
+        const [loadedSources, loadedFinal] = await Promise.all([
+          Promise.all(sourcePaths.map(loadImage)),
+          loadImage(finalPath),
+        ]);
 
-  useEffect(() => {
-    let raf = 0;
-    let disposed = false;
+        if (isCancelled) return;
+        setIsReady(true);
 
-    const run = async () => {
-      const canvas = canvasRef.current;
-      if (!canvas) {
-        return;
-      }
+        const canvas = canvasRef.current;
+        if (!canvas) return;
+        const ctx = canvas.getContext("2d", { alpha: false });
+        if (!ctx) return;
 
-      const ctx = canvas.getContext("2d", { alpha: false });
-      if (!ctx) {
-        return;
-      }
+        const render = () => {
+          if (isCancelled) return;
 
-      const images = await Promise.all(sourcePaths.map((path) => loadImage(path)));
-      const finalImage = await loadImage(normalizeAsset(finalComposite));
+          const timeline = getTimelineState(progressRef.current);
+          const livePointer = pointerRef.current;
 
-      const loop = () => {
-        if (disposed) {
-          return;
-        }
+          ctx.fillStyle = "#020306";
+          ctx.fillRect(0, 0, width, height);
 
-        const timeline = getTimelineState(progressRef.current);
-        const livePointer = pointerRef.current;
+          loadedSources.forEach((image, index) => {
+            const layer = getLayerState(index, loadedSources.length, timeline);
+            const parallax = calculateParallaxOffset(
+              reducedMotion ? 0 : livePointer.x,
+              reducedMotion ? 0 : livePointer.y,
+              { x: layer.x, y: layer.y, depth: layer.depth }
+            );
 
-        ctx.clearRect(0, 0, width, height);
-        ctx.fillStyle = "#020307";
-        ctx.fillRect(0, 0, width, height);
+            const imgW = width * 0.68;
+            const imgH = height * 0.68;
+            const drawX = width * 0.5 - imgW * 0.5 + parallax.x;
+            const drawY = height * 0.5 - imgH * 0.5 + parallax.y;
 
-        images.forEach((image, index) => {
-          const layer = getLayerState(index, images.length, timeline);
-          const parallax = calculateParallaxOffset(
-            reducedMotion ? 0 : livePointer.x,
-            reducedMotion ? 0 : livePointer.y,
-            {
-              x: layer.x,
-              y: layer.y,
-              depth: layer.depth,
-            },
-          );
+            ctx.save();
+            ctx.globalAlpha = layer.opacity;
+            
+            if (["merge", "final", "blueprint"].includes(timeline.phase)) {
+              const radius = Math.max(width, height) * (0.15 + layer.maskProgress * 0.95);
+              ctx.beginPath();
+              const jitter = Math.sin(index * 2.3 + progressRef.current * 14) * 8;
+              ctx.arc(width * 0.5 + jitter, height * 0.5, radius, 0, Math.PI * 2);
+              ctx.clip();
+            }
 
-          const imageWidth = width * 0.66;
-          const imageHeight = height * 0.66;
-          const drawX = width * 0.5 - imageWidth * 0.5 + parallax.x;
-          const drawY = height * 0.5 - imageHeight * 0.5 + parallax.y;
+            const alphaMask = radialMaskAlpha(
+              drawX + imgW / 2, drawY + imgH / 2, layer.maskProgress, width, height
+            );
+            ctx.globalAlpha *= 0.4 + alphaMask * 0.6;
+            
+            if (cinematicMode) {
+              const aberration = (1 - layer.maskProgress) * 0.002 * (1 + Math.sin(progressRef.current * 10) * 0.5);
+              applyChromaticAberration(ctx, image, drawX, drawY, imgW, imgH, aberration);
+            } else {
+              ctx.drawImage(image, drawX, drawY, imgW, imgH);
+            }
+            
+            ctx.restore();
+          });
 
-          ctx.save();
-          ctx.globalAlpha = layer.opacity;
-          ctx.translate(drawX + imageWidth / 2, drawY + imageHeight / 2);
-          ctx.scale(layer.scale, layer.scale);
-          ctx.translate(-(drawX + imageWidth / 2), -(drawY + imageHeight / 2));
-
-          if (
-            timeline.phase === "merge" ||
-            timeline.phase === "final" ||
-            timeline.phase === "blueprint"
-          ) {
-            const radius = Math.max(width, height) * (0.2 + layer.maskProgress * 0.9);
-            ctx.beginPath();
-            const jitter = Math.sin(index * 2.3 + progressRef.current * 14) * 12;
-            ctx.arc(width * 0.5 + jitter, height * 0.5, radius, 0, Math.PI * 2);
-            ctx.clip();
+          const finalBlend = (timeline.phase === "final" || timeline.phase === "blueprint")
+            ? Math.min(1, (timeline.progress - 0.82) / 0.18) : 0;
+              
+          if (finalBlend > 0) {
+            ctx.save();
+            ctx.globalAlpha = finalBlend;
+            if (cinematicMode) {
+              ctx.filter = `blur(${Math.max(0, (1 - finalBlend) * 10)}px) brightness(${1 + timeline.bloom * 2}) contrast(1.1)`;
+            }
+            ctx.drawImage(loadedFinal, width * 0.12, height * 0.1, width * 0.76, height * 0.8);
+            ctx.restore();
           }
 
-          const alphaMask = radialMaskAlpha(
-            drawX + imageWidth / 2,
-            drawY + imageHeight / 2,
-            layer.maskProgress,
-            width,
-            height,
-          );
-          ctx.globalAlpha *= 0.35 + alphaMask * 0.65;
-          ctx.drawImage(image, drawX, drawY, imageWidth, imageHeight);
-          ctx.restore();
-        });
+          drawFilmGrain(ctx, width, height, 1 - (reducedMotion ? 0.6 : 0));
+          drawVignette(ctx, width, height, timeline.vignette);
 
-        const finalBlend =
-          timeline.phase === "final" || timeline.phase === "blueprint"
-            ? (timeline.progress - 0.82) / 0.18
-            : 0;
-        if (finalBlend > 0) {
-          ctx.save();
-          ctx.globalAlpha = Math.min(1, finalBlend);
-          ctx.filter = `brightness(${1 + timeline.bloom}) saturate(1.08)`;
-          ctx.drawImage(finalImage, width * 0.14, height * 0.12, width * 0.72, height * 0.76);
-          ctx.restore();
-        }
+          rafId = requestAnimationFrame(render);
+        };
 
-        drawFilmGrain(ctx, width, height, 1 - Number(reducedMotion) * 0.4);
-        drawVignette(ctx, width, height, timeline.vignette);
-
-        if (timeline.phase === "blueprint" && blueprint?.length) {
-          drawBlueprint(ctx, width, height, blueprint);
-        }
-
-        raf = requestAnimationFrame(loop);
-      };
-
-      loop();
+        render();
+      } catch (e) { console.error(e); }
     };
 
-    void run();
-
-    return () => {
-      disposed = true;
-      cancelAnimationFrame(raf);
-    };
-  }, [blueprint, finalComposite, height, reducedMotion, sourcePaths, width]);
+    void initialize();
+    return () => { isCancelled = true; cancelAnimationFrame(rafId); };
+  }, [blueprint, finalPath, height, reducedMotion, sourcePaths, width, cinematicMode]);
 
   return (
-    <canvas
-      ref={canvasRef}
-      width={width}
-      height={height}
-      onMouseMove={(event) => {
-        const rect = event.currentTarget.getBoundingClientRect();
-        const x = (event.clientX - rect.left) / rect.width - 0.5;
-        const y = (event.clientY - rect.top) / rect.height - 0.5;
-        setPointer({ x, y });
-      }}
-      className="h-auto w-full rounded-2xl border border-white/10 bg-black"
-    />
+    <div className="relative aspect-video overflow-hidden rounded-2xl border border-white/10 bg-black shadow-2xl ring-1 ring-white/5">
+      {!isReady && (
+        <div className="absolute inset-0 flex items-center justify-center bg-black/60 backdrop-blur-md">
+          <div className="flex flex-col items-center gap-4">
+            <div className="h-8 w-8 animate-spin rounded-full border-2 border-emerald-400 border-t-transparent" />
+            <span className="text-[10px] font-bold uppercase tracking-[0.3em] text-zinc-400">Loading High-Res Engine</span>
+          </div>
+        </div>
+      )}
+      <canvas
+        ref={canvasRef}
+        width={width}
+        height={height}
+        onMouseMove={(e) => {
+          const r = e.currentTarget.getBoundingClientRect();
+          setPointer({ x: (e.clientX - r.left) / r.width - 0.5, y: (e.clientY - r.top) / r.height - 0.5 });
+        }}
+        className="h-full w-full cursor-crosshair object-cover"
+      />
+    </div>
   );
 }
